@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Space Tower Ship</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #050816;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #ffffff;
+      touch-action: manipulation;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    #hud {
+      position: fixed;
+      top: 14px;
+      left: 14px;
+      right: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+      z-index: 10;
+      font-weight: bold;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+    }
+    .pill {
+      background: rgba(15, 23, 42, 0.78);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 14px;
+    }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 24px;
+      background: rgba(4, 7, 20, 0.72);
+      z-index: 20;
+    }
+    .hidden { display: none !important; }
+    h1 {
+      font-size: clamp(28px, 7vw, 44px);
+      margin-bottom: 10px;
+      letter-spacing: 0.5px;
+    }
+    p {
+      max-width: 420px;
+      font-size: 15px;
+      line-height: 1.5;
+      color: #cbd5e1;
+      margin-bottom: 22px;
+    }
+    .btn {
+      border: none;
+      border-radius: 14px;
+      padding: 14px 26px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      color: #ffffff;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      box-shadow: 0 8px 24px rgba(37, 99, 235, 0.4);
+      margin: 6px;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-coin {
+      background: linear-gradient(135deg, #d97706, #f59e0b);
+      color: #111827;
+      box-shadow: 0 8px 24px rgba(245, 158, 11, 0.35);
+    }
+    #jumpHint {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.7);
+      pointer-events: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div class="pill" id="scoreHud">Towers: 0</div>
+    <div class="pill" id="tierHud">Tier: Cadet</div>
+    <div class="pill" id="coinHud">Coins: 0</div>
+  </div>
+
+  <div id="jumpHint">Tap screen to boost / jump between towers</div>
+
+  <div id="startScreen" class="overlay">
+    <h1>Space Tower Ship</h1>
+    <p>Navigate past cosmic towers, collect a coin every 10 towers, unlock new ship &amp; tower stages, and use coins to revive.</p>
+    <button id="launchBtn" class="btn">Launch Ship</button>
+  </div>
+
+  <div id="gameOverScreen" class="overlay hidden">
+    <h1>Ship Down</h1>
+    <p id="summaryText">Towers Cleared: 0 | Coins: 0</p>
+    <button id="reviveBtn" class="btn btn-coin hidden">Revive (1 Coin)</button>
+    <button id="restartBtn" class="btn">Launch Again</button>
+  </div>
+
+  <canvas id="gameCanvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const scoreHud = document.getElementById("scoreHud");
+    const tierHud = document.getElementById("tierHud");
+    const coinHud = document.getElementById("coinHud");
+    const startScreen = document.getElementById("startScreen");
+    const gameOverScreen = document.getElementById("gameOverScreen");
+    const summaryText = document.getElementById("summaryText");
+    const launchBtn = document.getElementById("launchBtn");
+    const reviveBtn = document.getElementById("reviveBtn");
+    const restartBtn = document.getElementById("restartBtn");
+
+    let width = 0;
+    let height = 0;
+    let dpr = 1;
+
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    const stars = Array.from({ length: 70 }, () => ({
+      x: Math.random() * width,
+      y: Math.random() * height,
+      r: Math.random() * 1.8 + 0.6,
+      speed: Math.random() * 0.6 + 0.2
+    }));
+
+    const planets = [
+      { x: 0.18, y: 0.22, r: 28, color: "#38bdf8", ring: false },
+      { x: 0.82, y: 0.18, r: 20, color: "#fb7185", ring: true },
+      { x: 0.72, y: 0.78, r: 34, color: "#a78bfa", ring: false }
+    ];
+
+    let state = "start"; // "start" | "playing" | "gameover"
+    let towersCleared = 0;
+    let lastCoinMilestone = 0;
+    let coins = 0;
+    let revivesUsed = 0;
+
+    const ship = {
+      x: 90,
+      y: height * 0.45,
+      vy: 0,
+      radius: 16,
+      gravity: 0.34,
+      jumpForce: -7.4
+    };
+
+    let towers = [];
+    let towerTimer = 0;
+
+    function getTierName(score) {
+      if (score >= 60) return "Ultra Legend";
+      if (score >= 50) return "Legend";
+      if (score >= 40) return "Ultra Pro";
+      if (score >= 30) return "Pro";
+      if (score >= 20) return "Crimson Core";
+      if (score >= 10) return "Golden Aura";
+      return "Cadet";
+    }
+
+    function getTowerTheme(score) {
+      if (score >= 20) {
+        return {
+          body: "#991b1b",
+          trim: "#fca5a5",
+          eye: "#38bdf8"
+        };
+      }
+      if (score >= 10) {
+        return {
+          body: "#f8fafc",
+          trim: "#eab308",
+          eye: null
+        };
+      }
+      return {
+        body: "#1e293b",
+        trim: "#64748b",
+        eye: null
+      };
+    }
+
+    function updateHud() {
+      scoreHud.textContent = `Towers: ${towersCleared}`;
+      tierHud.textContent = `Tier: ${getTierName(towersCleared)}`;
+      coinHud.textContent = `Coins: ${coins}`;
+    }
+
+    function spawnTower() {
+      const levelBoost = Math.min(Math.floor(towersCleared / 10) * 10, 80);
+      const gapHeight = Math.max(132, 185 - levelBoost * 0.55);
+      const towerWidth = 54;
+      const minTop = 55;
+      const maxTop = Math.max(minTop + 40, height - gapHeight - 75);
+      const topHeight = minTop + Math.random() * (maxTop - minTop);
+
+      towers.push({
+        x: width + 30,
+        width: towerWidth,
+        topHeight,
+        bottomY: topHeight + gapHeight,
+        passed: false
+      });
+    }
+
+    function resetGame() {
+      towersCleared = 0;
+      lastCoinMilestone = 0;
+      revivesUsed = 0;
+      towers = [];
+      towerTimer = 0;
+      ship.x = Math.min(110, width * 0.24);
+      ship.y = height * 0.45;
+      ship.vy = -4.5;
+      updateHud();
+    }
+
+    function startPlay() {
+      resetGame();
+      state = "playing";
+      startScreen.classList.add("hidden");
+      gameOverScreen.classList.add("hidden");
+      spawnTower();
+    }
+
+    function triggerGameOver() {
+      state = "gameover";
+      summaryText.textContent = `Towers Cleared: ${towersCleared} | Coins: ${coins}`;
+
+      const nextReviveCost = revivesUsed === 0 ? 1 : revivesUsed === 1 ? 2 : null;
+      if (nextReviveCost !== null && coins >= nextReviveCost) {
+        reviveBtn.textContent = `Revive (${nextReviveCost} ${nextReviveCost === 1 ? "Coin" : "Coins"})`;
+        reviveBtn.classList.remove("hidden");
+      } else {
+        reviveBtn.classList.add("hidden");
+      }
+
+      gameOverScreen.classList.remove("hidden");
+    }
+
+    function reviveShip() {
+      const cost = revivesUsed === 0 ? 1 : revivesUsed === 1 ? 2 : null;
+      if (cost === null || coins < cost) return;
+
+      coins -= cost;
+      revivesUsed += 1;
+      ship.y = height * 0.42;
+      ship.vy = -5.5;
+      towers = towers.filter(t => t.x > ship.x + 120);
+      updateHud();
+      state = "playing";
+      gameOverScreen.classList.add("hidden");
+    }
+
+    function boostShip() {
+      if (state === "playing") {
+        ship.vy = ship.jumpForce;
+      }
+    }
+
+    launchBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      startPlay();
+    });
+
+    restartBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      startPlay();
+    });
+
+    reviveBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      reviveShip();
+    });
+
+    window.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button")) return;
+      boostShip();
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        e.preventDefault();
+        if (state === "start") startPlay();
+        else boostShip();
+      }
+    });
+
+    function drawBackground() {
+      const grad = ctx.createLinearGradient(0, 0, 0, height);
+      grad.addColorStop(0, "#050816");
+      grad.addColorStop(1, "#111827");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
+
+      for (const s of stars) {
+        s.x -= s.speed * (state === "playing" ? 1.8 : 0.6);
+        if (s.x < 0) {
+          s.x = width;
+          s.y = Math.random() * height;
+        }
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (const p of planets) {
+        const px = p.x * width;
+        const py = p.y * height;
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(px, py, p.r, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (p.ring) {
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.ellipse(px, py, p.r * 1.6, p.r * 0.42, -0.35, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    function drawTowers() {
+      const theme = getTowerTheme(towersCleared);
+      for (const t of towers) {
+        // Top tower
+        ctx.fillStyle = theme.body;
+        ctx.fillRect(t.x, 0, t.width, t.topHeight);
+        ctx.strokeStyle = theme.trim;
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(t.x, 0, t.width, t.topHeight);
+
+        // Bottom tower
+        const bottomHeight = height - t.bottomY;
+        ctx.fillStyle = theme.body;
+        ctx.fillRect(t.x, t.bottomY, t.width, bottomHeight);
+        ctx.strokeRect(t.x, t.bottomY, t.width, bottomHeight);
+
+        // Optional eye motif after 20 towers
+        if (theme.eye) {
+          ctx.fillStyle = theme.eye;
+          ctx.beginPath();
+          ctx.arc(t.x + t.width / 2, Math.max(24, t.topHeight - 24), 7, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    function drawShip() {
+      const shipStage = Math.floor(towersCleared / 10);
+      const shipColor = shipStage >= 2 ? "#f43f5e" : shipStage === 1 ? "#facc15" : "#38bdf8";
+
+      ctx.save();
+      ctx.translate(ship.x, ship.y);
+      const tilt = Math.max(-0.45, Math.min(0.55, ship.vy * 0.05));
+      ctx.rotate(tilt);
+
+      // Flame
+      if (state === "playing" && ship.vy < 0) {
+        ctx.fillStyle = "#fb923c";
+        ctx.beginPath();
+        ctx.moveTo(-ship.radius, -5);
+        ctx.lineTo(-ship.radius - 14, 0);
+        ctx.lineTo(-ship.radius, 5);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Ship body
+      ctx.fillStyle = shipColor;
+      ctx.beginPath();
+      ctx.moveTo(ship.radius + 6, 0);
+      ctx.lineTo(-ship.radius, -ship.radius * 0.8);
+      ctx.lineTo(-ship.radius * 0.55, 0);
+      ctx.lineTo(-ship.radius, ship.radius * 0.8);
+      ctx.closePath();
+      ctx.fill();
+
+      // Cockpit
+      ctx.fillStyle = "#e0f2fe";
+      ctx.beginPath();
+      ctx.arc(2, 0, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function update() {
+      if (state !== "playing") return;
+
+      ship.vy += ship.gravity;
+      ship.y += ship.vy;
+
+      if (ship.y - ship.radius < 0) {
+        ship.y = ship.radius;
+        ship.vy = 0;
+      }
+      if (ship.y + ship.radius > height) {
+        triggerGameOver();
+        return;
+      }
+
+      const speed = 3.2 + Math.min(towersCleared * 0.04, 3.0);
+      towerTimer += speed;
+      const spawnInterval = Math.max(210, 275 - Math.min(towersCleared * 1.2, 55));
+
+      if (towerTimer >= spawnInterval) {
+        towerTimer = 0;
+        spawnTower();
+      }
+
+      for (let i = towers.length - 1; i >= 0; i--) {
+        const t = towers[i];
+        t.x -= speed;
+
+        if (!t.passed && t.x + t.width < ship.x) {
+          t.passed = true;
+          towersCleared += 1;
+
+          const milestone = Math.floor(towersCleared / 10) * 10;
+          if (milestone > 0 && milestone > lastCoinMilestone) {
+            lastCoinMilestone = milestone;
+            coins += 1;
+          }
+          updateHud();
+        }
+
+        // Collision check
+        const hitX = ship.x + ship.radius * 0.75 > t.x && ship.x - ship.radius * 0.75 < t.x + t.width;
+        if (hitX) {
+          const hitTop = ship.y - ship.radius * 0.75 < t.topHeight;
+          const hitBottom = ship.y + ship.radius * 0.75 > t.bottomY;
+          if (hitTop || hitBottom) {
+            triggerGameOver();
+            return;
+          }
+        }
+
+        if (t.x + t.width < -40) {
+          towers.splice(i, 1);
+        }
+      }
+    }
+
+    function loop() {
+      drawBackground();
+      drawTowers();
+      drawShip();
+      update();
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+  </html>
+
